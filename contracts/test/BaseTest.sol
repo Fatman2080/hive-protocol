@@ -9,7 +9,7 @@ import {HiveAgent} from "../src/HiveAgent.sol";
 import {HiveVault} from "../src/HiveVault.sol";
 import {HiveRound} from "../src/HiveRound.sol";
 
-/// @dev 测试用 ERC20 Token（可自由 mint）
+/// @dev 测试用 ERC20 Token（金库 USDT 记账用）
 contract MockERC20 is ERC20 {
     uint8 private _decimals;
 
@@ -26,10 +26,8 @@ contract MockERC20 is ERC20 {
     }
 }
 
-/// @title BaseTest — 所有测试的共享基础
-/// @notice 部署全套合约，创建 mock token，提供常用 helper
+/// @title BaseTest — 所有测试的共享基础（v2 无质押模型）
 abstract contract BaseTest is Test {
-    MockERC20 public axon;
     MockERC20 public usdt;
 
     HiveAccess public access;
@@ -42,7 +40,6 @@ abstract contract BaseTest is Test {
     address public buyback = makeAddr("buyback");
     address public ops = makeAddr("ops");
 
-    // 测试 Agent 地址
     address public alice = makeAddr("alice");
     address public bob = makeAddr("bob");
     address public carol = makeAddr("carol");
@@ -50,18 +47,14 @@ abstract contract BaseTest is Test {
     function setUp() public virtual {
         vm.startPrank(admin);
 
-        // 部署 mock token
-        axon = new MockERC20("Axon Token", "AXON", 18);
         usdt = new MockERC20("Tether USD", "USDT", 6);
 
-        // 部署合约
         access = new HiveAccess();
         hiveScore = new HiveScore(admin);
-        agentRegistry = new HiveAgent(admin, address(axon), address(access), address(hiveScore));
+        agentRegistry = new HiveAgent(admin, address(access), address(hiveScore));
         vault = new HiveVault(admin, address(usdt), buyback, ops);
         round = new HiveRound(admin, address(vault), address(hiveScore), address(agentRegistry));
 
-        // 配置权限
         hiveScore.grantRole(hiveScore.ROUND_ROLE(), address(round));
         vault.grantRole(vault.ROUND_ROLE(), address(round));
         agentRegistry.grantRole(agentRegistry.DEFAULT_ADMIN_ROLE(), address(round));
@@ -69,18 +62,11 @@ abstract contract BaseTest is Test {
         vm.stopPrank();
     }
 
-    // ─── Helper Functions ──────────────────────────────────
-
-    /// @dev 注册一个 Agent：设置声誉、mint AXON、approve、register
-    function _registerAgent(address agent, uint256 reputation, uint256 stakeAmount) internal {
-        vm.prank(admin);
-        agentRegistry.setReputation(agent, reputation);
-
-        axon.mint(agent, stakeAmount);
-        vm.startPrank(agent);
-        axon.approve(address(agentRegistry), stakeAmount);
-        agentRegistry.register(stakeAmount);
-        vm.stopPrank();
+    /// @dev 注册 Agent：给主网余额然后调 register()
+    function _registerAgent(address agent, uint256 balance) internal {
+        vm.deal(agent, balance);
+        vm.prank(agent);
+        agentRegistry.register();
     }
 
     /// @dev 向金库注入 USDT
@@ -97,9 +83,8 @@ abstract contract BaseTest is Test {
         return keccak256(abi.encodePacked(prediction, confidence, salt));
     }
 
-    /// @dev 生成 commit hash（用枚举类型）
     function _commitHashTyped(bool isUp, uint8 confidence, bytes32 salt) internal pure returns (bytes32) {
-        uint8 pred = isUp ? 0 : 1; // UP=0, DOWN=1
+        uint8 pred = isUp ? 0 : 1;
         return keccak256(abi.encodePacked(pred, confidence, salt));
     }
 }

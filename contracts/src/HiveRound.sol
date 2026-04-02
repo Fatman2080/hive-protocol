@@ -6,26 +6,18 @@ import {HiveTypes} from "./interfaces/IHiveTypes.sol";
 import {HiveVault} from "./HiveVault.sol";
 import {HiveScore} from "./HiveScore.sol";
 import {HiveAgent} from "./HiveAgent.sol";
+import {HiveAccess} from "./HiveAccess.sol";
 import {HiveMath} from "./libraries/HiveMath.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title HiveRound — 轮次管理（commit → reveal → settle）
-/// @notice 核心编排合约。operator（执行引擎）调用 startRound/settle，
-///         Agent 调用 commit/reveal。
-///
-/// 生命周期：
-///   IDLE → startRound() → COMMIT → (时间到) → REVEAL → settle() → SETTLED → IDLE
-///
-/// Phase 0 简化：
-///   - 阶段切换由 operator 在链下按时间触发（不做链上时间锁）
-///   - settle 由 operator 传入 profitLoss（链下从 Polymarket/CEX 获取）
+/// @notice 无质押冻结/slash，惩罚仅通过 HiveScore 扣分实现。
 contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
     using HiveMath for uint256;
 
     bytes32 public constant OPERATOR_ROLE = keccak256("OPERATOR_ROLE");
-
-    uint256 public constant DECISION_THRESHOLD_BPS = 6000; // 60% 才下注
+    uint256 public constant DECISION_THRESHOLD_BPS = 6000;
 
     HiveVault public immutable vault;
     HiveScore public immutable score;
@@ -57,7 +49,7 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         agentRegistry = HiveAgent(agent_);
     }
 
-    // ─── 轮次生命周期 ──────────────────────────────────────
+    // ─── 轮次生命周期 ──────────────────────────────────
 
     function startRound(uint256 openPrice) external onlyRole(OPERATOR_ROLE) returns (uint256 roundId) {
         if (_currentRoundId > 0) {
@@ -78,13 +70,12 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         emit RoundStarted(roundId, openPrice, block.timestamp);
     }
 
-    /// @notice operator 推进到 reveal 阶段
     function advanceToReveal(uint256 roundId) external onlyRole(OPERATOR_ROLE) {
         require(_rounds[roundId].phase == HiveTypes.RoundPhase.COMMIT, "HiveRound: not in COMMIT phase");
         _rounds[roundId].phase = HiveTypes.RoundPhase.REVEAL;
     }
 
-    // ─── Agent 提交预测 ─────────────────────────────────────
+    // ─── Agent 提交预测 ─────────────────────────────────
 
     function commit(uint256 roundId, bytes32 commitHash) external {
         RoundState storage r = _rounds[roundId];
@@ -110,11 +101,9 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         require(ci.commitHash != bytes32(0), "HiveRound: no commit found");
         require(!ci.revealed, "HiveRound: already revealed");
 
-        // 验证 commit hash
         bytes32 expected = keccak256(abi.encodePacked(prediction, confidence, salt));
         require(expected == ci.commitHash, "HiveRound: hash mismatch");
 
-        // 验证信心度不超过等级上限
         HiveTypes.Tier tier = agentRegistry.getTier(msg.sender);
         uint8 maxConf = HiveAccess(address(agentRegistry.accessControl())).maxAllowedConfidence(tier);
         require(confidence <= maxConf, "HiveRound: confidence exceeds tier limit");
@@ -124,9 +113,8 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         ci.prediction = prediction;
         ci.confidence = confidence;
 
-        // 计算权重
-        uint256 stake = agentRegistry.getStake(msg.sender);
-        uint256 w = HiveMath.calcWeight(score.getScore(msg.sender), confidence, stake);
+        uint256 agentBalance = msg.sender.balance;
+        uint256 w = HiveMath.calcWeight(score.getScore(msg.sender), confidence, agentBalance);
         ci.weight = w;
 
         if (prediction == HiveTypes.Prediction.UP) {
@@ -135,16 +123,10 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
             r.downWeight += w;
         }
 
-        // 信心度冻结质押
-        uint256 freezeAmt = (stake * HiveMath.freezeBps(confidence)) / 10000;
-        if (freezeAmt > 0) {
-            agentRegistry.freezeStake(msg.sender, freezeAmt);
-        }
-
         emit PredictionRevealed(roundId, msg.sender, prediction, confidence);
     }
 
-    // ─── 结算 ──────────────────────────────────────────────
+    // ─── 结算 ──────────────────────────────────────────
 
     function settle(uint256 roundId, uint256 closePrice, int256 profitLoss) external onlyRole(OPERATOR_ROLE) nonReentrant {
         RoundState storage r = _rounds[roundId];
@@ -155,12 +137,10 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         r.profitLoss = profitLoss;
         r.betAmount = vault.currentBetSize();
 
-        // 判定实际结果
         HiveTypes.Prediction actualResult = closePrice > r.openPrice
             ? HiveTypes.Prediction.UP
             : HiveTypes.Prediction.DOWN;
 
-        // 判定蜂群决策方向
         uint256 totalWeight = r.upWeight + r.downWeight;
         bool skipped = false;
         HiveTypes.Prediction groupDecision;
@@ -179,19 +159,13 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         }
 
         if (skipped) {
-            _handleSkippedRound(roundId);
             emit RoundSkipped(roundId, "signal insufficient");
             return;
         }
 
-        // 分类 agents + 更新 HiveScore + 处理质押冻结
-        address[] memory correctAgents;
-        uint256[] memory correctWeights;
-        uint256 correctCount;
+        (address[] memory correctAgents, uint256[] memory correctWeights, uint256 correctCount) =
+            _classifyAndScore(roundId, actualResult);
 
-        (correctAgents, correctWeights, correctCount) = _classifyAndScore(roundId, actualResult);
-
-        // 处理盈亏
         if (profitLoss > 0) {
             vault.distributeProfit(roundId, correctAgents, correctWeights, uint256(profitLoss));
         } else if (profitLoss < 0) {
@@ -201,7 +175,7 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         emit RoundSettled(roundId, actualResult, profitLoss, correctCount);
     }
 
-    // ─── 内部方法 ──────────────────────────────────────────
+    // ─── 内部方法 ──────────────────────────────────────
 
     function _classifyAndScore(uint256 roundId, HiveTypes.Prediction actualResult)
         internal
@@ -219,27 +193,12 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
             HiveTypes.CommitInfo storage ci = _commits[roundId][agent];
 
             if (!ci.revealed) {
-                // 未 reveal → 扣 1 分
                 score.updateScore(agent, false, 1);
                 continue;
             }
 
             bool isCorrect = ci.prediction == actualResult;
             score.updateScore(agent, isCorrect, ci.confidence);
-
-            // 处理质押冻结
-            uint256 stake = agentRegistry.getStake(agent);
-            uint256 frozenAmt = (stake * HiveMath.freezeBps(ci.confidence)) / 10000;
-
-            if (frozenAmt > 0) {
-                if (isCorrect) {
-                    agentRegistry.unfreezeStake(agent, frozenAmt);
-                } else {
-                    uint256 slashAmt = frozenAmt / 2; // 扣 50%
-                    agentRegistry.unfreezeStake(agent, frozenAmt - slashAmt);
-                    agentRegistry.slashFrozenStake(agent, slashAmt, address(vault));
-                }
-            }
 
             if (isCorrect) {
                 tempCorrect[correctCount] = agent;
@@ -248,7 +207,6 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
             }
         }
 
-        // 裁剪数组到实际长度
         address[] memory correctAgents = new address[](correctCount);
         uint256[] memory correctWeights = new uint256[](correctCount);
         for (uint256 i = 0; i < correctCount; i++) {
@@ -259,23 +217,7 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         return (correctAgents, correctWeights, correctCount);
     }
 
-    function _handleSkippedRound(uint256 roundId) internal {
-        RoundState storage r = _rounds[roundId];
-        // 跳过轮次：解冻所有质押，不更新积分
-        for (uint256 i = 0; i < r.participants.length; i++) {
-            address agent = r.participants[i];
-            HiveTypes.CommitInfo storage ci = _commits[roundId][agent];
-            if (ci.revealed) {
-                uint256 stake = agentRegistry.getStake(agent);
-                uint256 frozenAmt = (stake * HiveMath.freezeBps(ci.confidence)) / 10000;
-                if (frozenAmt > 0) {
-                    agentRegistry.unfreezeStake(agent, frozenAmt);
-                }
-            }
-        }
-    }
-
-    // ─── 只读 ──────────────────────────────────────────────
+    // ─── 只读 ──────────────────────────────────────────
 
     function getRound(uint256 roundId) external view returns (HiveTypes.RoundData memory) {
         RoundState storage r = _rounds[roundId];
@@ -304,6 +246,3 @@ contract HiveRound is IHiveRound, AccessControl, ReentrancyGuard {
         return _rounds[roundId].participants;
     }
 }
-
-// 需要导入 HiveAccess 以调用 maxAllowedConfidence
-import {HiveAccess} from "./HiveAccess.sol";

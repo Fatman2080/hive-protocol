@@ -73,6 +73,14 @@ async function main() {
   console.log(`蜂巢协议 — 批量赎回 (最近 ${HOURS}h)`);
   console.log(`Proxy: ${PROXY}\n`);
 
+  const maticBal = await polyPub.getBalance({ address: account.address });
+  const maticStr = (Number(maticBal) / 1e18).toFixed(4);
+  console.log(`EOA MATIC: ${maticStr}`);
+  if (maticBal < 5000000000000000n) { // < 0.005 MATIC
+    console.log(`⚠️  MATIC 余额不足 (${maticStr})，无法支付 gas，跳过赎回`);
+    return;
+  }
+
   const balBefore = await polyPub.readContract({
     address: USDC_E, abi: erc20Abi,
     functionName: 'balanceOf', args: [PROXY],
@@ -127,12 +135,22 @@ async function main() {
     try {
       const bBefore = await polyPub.readContract({ address: USDC_E, abi: erc20Abi, functionName: 'balanceOf', args: [PROXY] });
 
-      const hash = await polyWallet.writeContract({
+      const callArgs = {
         address: FACTORY, abi: proxyAbi,
         functionName: 'proxy',
         args: [[{ callType: 1, to: CTF, value: 0n, data: redeemData }]],
-        gas: 500000n,
-      });
+      };
+
+      let gasEst;
+      try {
+        gasEst = await polyPub.estimateContractGas({ ...callArgs, account: account.address });
+        gasEst = gasEst * 130n / 100n; // +30% buffer
+      } catch (ge) {
+        console.log(`  ⚠️  ${label} → gas估算失败: ${(ge.shortMessage || ge.message || '').slice(0, 80)}`);
+        continue;
+      }
+
+      const hash = await polyWallet.writeContract({ ...callArgs, gas: gasEst });
       const receipt = await polyPub.waitForTransactionReceipt({ hash, timeout: 60000 });
 
       const bAfter = await polyPub.readContract({ address: USDC_E, abi: erc20Abi, functionName: 'balanceOf', args: [PROXY] });
@@ -145,7 +163,7 @@ async function main() {
         console.log(`  ❌ ${label} → reverted`);
       }
     } catch (e) {
-      console.log(`  ⚠️  ${label} → ${(e.shortMessage || e.message || '').slice(0, 60)}`);
+      console.log(`  ⚠️  ${label} → ${(e.shortMessage || e.message || '').slice(0, 80)}`);
     }
 
     await new Promise(r => setTimeout(r, 500));

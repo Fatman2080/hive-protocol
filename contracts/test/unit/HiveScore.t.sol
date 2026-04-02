@@ -16,16 +16,16 @@ contract HiveScoreTest is BaseTest {
         vm.prank(address(round));
         hiveScore.updateScore(alice, true, 50);
 
-        // delta = 1 + 50/50 = 2
-        assertEq(hiveScore.getScore(alice), 50 + 2);
+        // delta = 1 + 50/50 = 2，初始分为 0
+        assertEq(hiveScore.getScore(alice), 2);
     }
 
     function test_wrongPrediction_decreases_score() public {
         vm.prank(address(round));
         hiveScore.updateScore(alice, false, 50);
 
-        // delta = -(1 + 50/50) = -2
-        assertEq(hiveScore.getScore(alice), 50 - 2);
+        // delta = -(1 + 50/50) = -2，不得低于 0
+        assertEq(hiveScore.getScore(alice), 0);
     }
 
     function test_streak_tracking() public {
@@ -52,11 +52,11 @@ contract HiveScoreTest is BaseTest {
         vm.startPrank(address(round));
 
         // confidence=30: delta = 1 + 30/50 = 1
-        hiveScore.updateScore(alice, true, 30); // 50 + 1 = 51
-        hiveScore.updateScore(alice, true, 30); // 51 + 1 = 52
-        hiveScore.updateScore(alice, true, 30); // 52 + 1 + 1(streak bonus) = 54
+        hiveScore.updateScore(alice, true, 30); // 0 + 1 = 1
+        hiveScore.updateScore(alice, true, 30); // 1 + 1 = 2
+        hiveScore.updateScore(alice, true, 30); // 2 + 1 + 1(streak bonus) = 4
 
-        assertEq(hiveScore.getScore(alice), 54);
+        assertEq(hiveScore.getScore(alice), 4);
         vm.stopPrank();
     }
 

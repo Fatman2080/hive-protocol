@@ -2,7 +2,6 @@
 pragma solidity ^0.8.20;
 
 /// @title IHiveTypes — 蜂巢协议全局类型定义
-/// @notice 所有合约共享的枚举、结构体统一在这里定义，避免重复声明和循环引用
 library HiveTypes {
     enum Prediction {
         UP,
@@ -25,8 +24,7 @@ library HiveTypes {
     }
 
     struct TierConfig {
-        uint256 minReputation;
-        uint256 minStake;
+        uint256 minBalance;     // 主网最低 AXON 余额
         uint8 maxConfidence;
         uint256 dailyRoundCap;
     }
@@ -34,13 +32,12 @@ library HiveTypes {
     struct AgentProfile {
         bool isActive;
         Tier tier;
-        uint256 axonStaked;
-        uint256 hiveScore;
+        uint256 axonBalance;    // 主网余额（只读）
+        uint256 hiveScore;      // 协议内部积分
         uint256 totalRounds;
         uint256 correctRounds;
         int256 currentStreak;
         uint256 bestStreak;
-        uint256 totalEarnedUSDT;
         uint256 registeredAt;
     }
 

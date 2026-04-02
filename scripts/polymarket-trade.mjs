@@ -188,6 +188,7 @@ async function main() {
     const resp = await client.postOrder(order, 'FOK');
     console.error('CLOB response:', JSON.stringify(resp).slice(0, 300));
 
+    const errText = resp.errorMsg || resp.error || '';
     const result = {
       success: resp.success || false,
       orderId: resp.orderID,
@@ -202,7 +203,8 @@ async function main() {
       makingAmount: resp.makingAmount,
       takingAmount: resp.takingAmount,
       txHash: resp.transactionsHashes?.[0] || null,
-      errorMsg: resp.errorMsg || resp.error || '',
+      error: errText || (resp.success ? '' : 'order_rejected'),
+      errorMsg: errText,
     };
 
     console.log(JSON.stringify(result, null, 2));

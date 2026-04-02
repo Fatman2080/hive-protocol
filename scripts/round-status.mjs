@@ -1,17 +1,15 @@
 /**
- * 蜂巢协议 — 轮次状态查询
+ * 蜂巢协议 — 轮次状态查询 (v2 — 无质押模型)
  *
- * 提供两种模式：
+ * 两种模式：
  *   1. CLI 查询：node scripts/round-status.mjs
  *   2. HTTP 服务：node scripts/round-status.mjs --serve [--port 3210]
  *
- * 外部 Agent 可通过 HTTP 接口获取当前轮次信息，决定何时 commit/reveal。
- *
  * API 端点:
- *   GET  /status          — 当前轮次完整状态
- *   GET  /phase           — 仅返回当前阶段 ("COMMIT"/"REVEAL"/"SETTLED"/"IDLE")
- *   GET  /next-slot       — 下一个 15 分钟窗口时间
- *   POST /onboard         — 自助准入（body: {"address":"0x..."}）
+ *   GET  /status     — 当前轮次完整状态
+ *   GET  /phase      — 仅返回当前阶段
+ *   GET  /next-slot  — 下一个 15 分钟窗口时间
+ *   POST /onboard    — 自助准入（body: {"address":"0x..."}），自动调 register()
  */
 
 import { createPublicClient, createWalletClient, http, parseAbi } from 'viem';
@@ -31,9 +29,9 @@ function loadEnv() {
 loadEnv();
 
 const RPC        = 'https://mainnet-rpc.axonchain.ai/';
-const HIVE_ROUND = process.env.HIVE_ROUND_ADDRESS || '0xCA4b670D1a91E52a90A390836E1397929DbAcd02';
-const HIVE_AGENT = process.env.HIVE_AGENT_ADDRESS || '0x4222fE51db0b8e2c79460fF963Fe2B56B54Cbc45';
-const HIVE_SCORE = process.env.HIVE_SCORE_ADDRESS || '0xc55EC85F2ee552F565f13f2dc9c77fd6B16F3b14';
+const HIVE_ROUND = process.env.HIVE_ROUND_ADDRESS;
+const HIVE_AGENT = process.env.HIVE_AGENT_ADDRESS;
+const HIVE_SCORE = process.env.HIVE_SCORE_ADDRESS;
 
 const args = process.argv.slice(2);
 const SERVE = args.includes('--serve');
@@ -50,18 +48,12 @@ const roundAbi = parseAbi([
 const agentAbi = parseAbi([
   'function isActive(address) view returns (bool)',
   'function activeAgentCount() view returns (uint256)',
-  'function getReputation(address) view returns (uint256)',
-  'function setReputation(address,uint256)',
+  'function getStake(address) view returns (uint256)',
+  'function getTier(address) view returns (uint8)',
+  'function register()',
 ]);
 
 const axon = createPublicClient({ chain: { id: 8210 }, transport: http(RPC) });
-
-const OPERATOR_KEY = process.env.OPERATOR_PRIVATE_KEY;
-let axonWallet = null;
-if (OPERATOR_KEY) {
-  const opAccount = privateKeyToAccount(OPERATOR_KEY);
-  axonWallet = createWalletClient({ account: opAccount, chain: { id: 8210, name: 'Axon' }, transport: http(RPC) });
-}
 
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN || '8310104753:AAHmuR64fDdAxzdnn6gcxmywhh5S9YkowP4';
 const TG_CHAT_ID   = process.env.TG_CHAT_ID   || '-1003349791999';
@@ -78,29 +70,39 @@ async function tgNotify(text) {
 }
 
 async function onboardAgent(address) {
-  if (!axonWallet) return { success: false, error: 'Operator key not configured' };
   if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return { success: false, error: 'Invalid address format' };
 
-  const rep = await axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'getReputation', args: [address] });
-  if (rep >= 10n) {
-    const isActive = await axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'isActive', args: [address] });
-    return { success: true, address, reputation: Number(rep), alreadyActive: isActive, message: isActive ? 'Already registered and active' : 'Already admitted, proceed to register' };
+  const isActive = await axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'isActive', args: [address] });
+  if (isActive) {
+    return { success: true, address, message: 'Already registered and active' };
   }
 
-  const hash = await axonWallet.writeContract({
-    address: HIVE_AGENT, abi: agentAbi,
-    functionName: 'setReputation', args: [address, 10n],
-    gas: 100000n,
-  });
+  const balance = await axon.getBalance({ address });
+  const balanceAxon = Number(balance) / 1e18;
 
-  await tgNotify(`🆕 *新 Agent 自助准入*\n地址: \`${address}\`\n声誉: 10 | 等级: Bronze\ntx: \`${hash.slice(0, 20)}...\``);
+  if (balanceAxon < 100) {
+    return {
+      success: false, address,
+      balance: balanceAxon.toFixed(2),
+      error: `Insufficient AXON balance: ${balanceAxon.toFixed(2)} (need >= 100)`,
+    };
+  }
+
+  const tiers = ['NONE', 'BRONZE', 'SILVER', 'GOLD', 'DIAMOND'];
+  let tier = 'BRONZE';
+  if (balanceAxon >= 5000) tier = 'DIAMOND';
+  else if (balanceAxon >= 2000) tier = 'GOLD';
+  else if (balanceAxon >= 500) tier = 'SILVER';
+
+  await tgNotify(`🆕 *Agent 准入检查通过*\n地址: \`${address}\`\n余额: ${balanceAxon.toFixed(2)} AXON\n等级: ${tier}\n请自行调用 register() 完成注册`);
 
   return {
-    success: true, address, reputation: 10, tier: 'Bronze',
-    txHash: hash,
+    success: true, address,
+    balance: balanceAxon.toFixed(2),
+    tier,
     nextSteps: [
-      `approve 100+ AXON to ${HIVE_AGENT}`,
-      `call register(100000000000000000000)`,
+      `call register() on HiveAgent (${HIVE_AGENT})`,
+      `cast send ${HIVE_AGENT} "register()" --private-key <your_key> --rpc-url ${RPC} --gas-limit 200000 --legacy`,
     ],
   };
 }
@@ -168,7 +170,6 @@ if (!SERVE) {
   process.exit(0);
 }
 
-// HTTP 服务模式
 const server = createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -204,7 +205,8 @@ const server = createServer(async (req, res) => {
       res.end(JSON.stringify({
         endpoint: 'POST /onboard',
         usage: 'curl -X POST http://host:3210/onboard -H "Content-Type: application/json" -d \'{"address":"0x..."}\'',
-        description: 'Self-service admission. Sets initial reputation to 10 (Bronze).',
+        description: 'Check if agent meets balance requirement (>= 100 AXON). Agent then calls register() themselves.',
+        requirements: 'AXON mainnet balance >= 100 AXON',
       }, null, 2));
     } else {
       res.statusCode = 404;
@@ -217,9 +219,9 @@ const server = createServer(async (req, res) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`蜂巢协议 — 轮次状态 API`);
+  console.log(`蜂巢协议 — 轮次状态 API (v2)`);
   console.log(`  GET  http://localhost:${PORT}/status`);
   console.log(`  GET  http://localhost:${PORT}/phase`);
   console.log(`  GET  http://localhost:${PORT}/next-slot`);
-  console.log(`  POST http://localhost:${PORT}/onboard   ← 自助准入（开放）`);
+  console.log(`  POST http://localhost:${PORT}/onboard   ← 余额检查 + 准入引导`);
 });

@@ -15,10 +15,10 @@ contract FullRoundTest is BaseTest {
     function setUp() public override {
         super.setUp();
 
-        // 注册 3 个 Agent（青铜等级：声誉 ≥ 10, 质押 ≥ 100 AXON）
-        _registerAgent(alice, 15, 200e18);
-        _registerAgent(bob, 12, 150e18);
-        _registerAgent(carol, 20, 300e18);
+        // 注册 3 个 Agent（青铜等级：主网 AXON 余额 ≥ 100e18）
+        _registerAgent(alice, 200e18);
+        _registerAgent(bob, 150e18);
+        _registerAgent(carol, 300e18);
 
         // 金库注入 10,000 USDT
         _fundVault(10_000e6);
@@ -90,10 +90,11 @@ contract FullRoundTest is BaseTest {
         // Alice 权重更高（confidence 60 > Bob 50），分到更多
         assertTrue(vault.pendingReward(alice) > vault.pendingReward(bob), "alice > bob reward");
 
-        // HiveScore 验证
+        // HiveScore 验证（初始分为 0，错误方扣分后仍为 0，与赢家对比）
         assertTrue(hiveScore.getScore(alice) > hiveScore.INITIAL_SCORE(), "alice score up");
         assertTrue(hiveScore.getScore(bob) > hiveScore.INITIAL_SCORE(), "bob score up");
-        assertTrue(hiveScore.getScore(carol) < hiveScore.INITIAL_SCORE(), "carol score down");
+        assertTrue(hiveScore.getScore(carol) < hiveScore.getScore(alice), "carol score down");
+        assertTrue(hiveScore.getScore(carol) < hiveScore.getScore(bob), "carol below bob");
 
         // 金库留存增加
         assertTrue(vault.treasuryBalance() > 10_000e6, "treasury grew");
@@ -132,9 +133,11 @@ contract FullRoundTest is BaseTest {
         // 金库减少
         assertTrue(vault.treasuryBalance() < treasuryBefore, "treasury decreased");
 
-        // 所有人 score 下降
-        assertTrue(hiveScore.getScore(alice) < hiveScore.INITIAL_SCORE());
-        assertTrue(hiveScore.getScore(bob) < hiveScore.INITIAL_SCORE());
+        // 初始分为 0，错误后分数触底为 0；用连败 streak 表示受罚
+        assertEq(hiveScore.getScore(alice), hiveScore.INITIAL_SCORE());
+        assertEq(hiveScore.getScore(bob), hiveScore.INITIAL_SCORE());
+        assertTrue(hiveScore.getStreak(alice) < 0);
+        assertTrue(hiveScore.getStreak(bob) < 0);
     }
 
     /// @notice 信号不足跳过轮次

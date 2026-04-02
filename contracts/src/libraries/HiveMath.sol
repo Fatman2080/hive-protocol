@@ -15,23 +15,14 @@ library HiveMath {
         return y;
     }
 
-    /// @notice 计算 Agent 权重 = hiveScore × confidence × sqrt(stake)
-    /// @dev stake 以 1e18 为单位（ERC20 decimals），先做 sqrt 再归一化
-    function calcWeight(uint256 hiveScore, uint8 confidence, uint256 stake) internal pure returns (uint256) {
-        uint256 sqrtStake = sqrt(stake / 1e18);
-        if (sqrtStake == 0) sqrtStake = 1;
-        return hiveScore * uint256(confidence) * sqrtStake;
-    }
-
-    /// @notice 基于信心度计算质押冻结比例 (basis points)
-    ///   confidence ≤ 30  → 0 bps
-    ///   confidence 31-60 → 100 bps (1%)
-    ///   confidence 61-80 → 300 bps (3%)
-    ///   confidence 81-100→ 500 bps (5%)
-    function freezeBps(uint8 confidence) internal pure returns (uint256) {
-        if (confidence <= 30) return 0;
-        if (confidence <= 60) return 100;
-        if (confidence <= 80) return 300;
-        return 500;
+    /// @notice 计算 Agent 权重 = effectiveScore × confidence × sqrt(balance)
+    /// @param hiveScore 协议内部积分（从 0 开始）；为 0 时按 1 计，避免首轮无法产生信号
+    /// @param confidence 信心度 1-100
+    /// @param balance 主网 AXON 余额（18 decimals）
+    function calcWeight(uint256 hiveScore, uint8 confidence, uint256 balance) internal pure returns (uint256) {
+        uint256 s = hiveScore == 0 ? 1 : hiveScore;
+        uint256 sqrtBal = sqrt(balance / 1e18);
+        if (sqrtBal == 0) sqrtBal = 1;
+        return s * uint256(confidence) * sqrtBal;
     }
 }

@@ -1,18 +1,18 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════
-# 蜂巢协议 — Agent 准入（Operator 执行）
+# 蜂巢协议 — Agent 自助准入 (v2 — 无质押，读主网余额)
 # ═══════════════════════════════════════════════════════════════
 #
-# 为新 Agent 设置初始声誉，解锁 Bronze 注册资格。
-# Agent 拿到资格后自己调 register(axonAmount) 完成注册。
+# 检查 Agent 主网余额是否满足准入门槛 (≥100 AXON)，
+# 满足则直接调 register() 完成注册。
 #
 # 用法:
-#   bash scripts/onboard-agent.sh <agent_address>
-#   bash scripts/onboard-agent.sh <agent_address> --reputation 30  # 直接给白银
+#   bash scripts/onboard-agent.sh <agent_private_key>
 #
-# 前置条件:
-#   - .env 中 OPERATOR_PRIVATE_KEY 是 HiveAgent 的 admin
-#   - Agent 需要自己持有足够的 AXON 代币和 Gas
+# 流程:
+#   1. 查余额 → 判断等级
+#   2. 调 HiveAgent.register() → 链上注册
+#   3. TG 通知
 # ═══════════════════════════════════════════════════════════════
 
 set -euo pipefail
@@ -23,65 +23,63 @@ source "$(dirname "$SCRIPT_DIR")/.env"
 RPC="https://mainnet-rpc.axonchain.ai/"
 HIVE_AGENT="$HIVE_AGENT_ADDRESS"
 
-AGENT_ADDR="${1:?用法: bash onboard-agent.sh <agent_address>}"
-REP=10
+AGENT_KEY="${1:?用法: bash onboard-agent.sh <agent_private_key>}"
+AGENT_ADDR=$(cast wallet address "$AGENT_KEY")
 
-while [[ $# -gt 1 ]]; do
-  case $2 in
-    --reputation) REP="$3"; shift 2 ;;
-    *) shift ;;
-  esac
-done
-
-echo "═══ 蜂巢协议 — Agent 准入 ═══"
+echo "═══ 蜂巢协议 — Agent 准入 (v2) ═══"
 echo "  Agent: $AGENT_ADDR"
-echo "  设置声誉: $REP"
 echo ""
 
 # 检查是否已注册
 IS_ACTIVE=$(cast call "$HIVE_AGENT" "isActive(address)(bool)" "$AGENT_ADDR" --rpc-url "$RPC" 2>&1 | awk '{print $1}')
 if [ "$IS_ACTIVE" = "true" ]; then
-  echo "⚠️  该 Agent 已经注册并激活，无需再次准入。"
-  STAKE=$(cast call "$HIVE_AGENT" "getStake(address)(uint256)" "$AGENT_ADDR" --rpc-url "$RPC" 2>&1 | awk '{print $1}')
-  echo "  当前质押: $(python3 -c "print(f'{int(\"$STAKE\") / 1e18:.0f}')") AXON"
+  echo "⚠️  该 Agent 已注册激活。"
+  BAL=$(cast balance "$AGENT_ADDR" --rpc-url "$RPC" -e 2>&1 | awk '{print $1}')
+  echo "  主网余额: $BAL AXON"
   exit 0
 fi
 
-# 设置声誉
-echo "[1] 设置声誉值..."
-cast send "$HIVE_AGENT" "setReputation(address,uint256)" "$AGENT_ADDR" "$REP" \
-  --private-key "$OPERATOR_PRIVATE_KEY" --rpc-url "$RPC" --gas-limit 100000 2>&1 | head -3
+# 查余额
+BAL_WEI=$(cast balance "$AGENT_ADDR" --rpc-url "$RPC" 2>&1)
+BAL_AXON=$(python3 -c "print(f'{int(\"$BAL_WEI\") / 1e18:.2f}')")
+echo "  主网余额: $BAL_AXON AXON"
 
-echo ""
-
-# 验证
-NEW_REP=$(cast call "$HIVE_AGENT" "getReputation(address)(uint256)" "$AGENT_ADDR" --rpc-url "$RPC" 2>&1 | awk '{print $1}')
-echo "[2] 验证: 声誉已设为 $NEW_REP"
-
-# 计算可用等级
-if [ "$REP" -ge 100 ]; then
-  TIER="Diamond (质押 ≥ 5000 AXON)"
-elif [ "$REP" -ge 60 ]; then
-  TIER="Gold (质押 ≥ 2000 AXON)"
-elif [ "$REP" -ge 30 ]; then
-  TIER="Silver (质押 ≥ 500 AXON)"
-elif [ "$REP" -ge 10 ]; then
-  TIER="Bronze (质押 ≥ 100 AXON)"
-else
-  TIER="无 (声誉不足)"
+BAL_INT=$(python3 -c "print(int(float('$BAL_AXON')))")
+if [ "$BAL_INT" -lt 100 ]; then
+  echo "❌ 余额不足 (需要 ≥ 100 AXON)"
+  exit 1
 fi
 
+# 判断等级
+if [ "$BAL_INT" -ge 5000 ]; then
+  TIER="Diamond"
+elif [ "$BAL_INT" -ge 2000 ]; then
+  TIER="Gold"
+elif [ "$BAL_INT" -ge 500 ]; then
+  TIER="Silver"
+else
+  TIER="Bronze"
+fi
+
+echo "  等级: $TIER"
 echo ""
-echo "═══ 准入完成 ═══"
+
+# 注册
+echo "[1] 调用 register()..."
+cast send "$HIVE_AGENT" "register()" \
+  --private-key "$AGENT_KEY" --rpc-url "$RPC" --gas-limit 200000 --legacy --gas-price 8000000000 2>&1 | head -3
+
+echo ""
+echo "═══ 注册完成 ═══"
 echo "  Agent: $AGENT_ADDR"
-echo "  声誉: $NEW_REP"
-echo "  可用等级: $TIER"
+echo "  余额: $BAL_AXON AXON"
+echo "  等级: $TIER"
+echo "  HiveScore: 0 (初始值)"
 echo ""
-echo "Agent 接下来需要自己执行:"
-echo "  1. 持有足够 AXON (至少 100 AXON for Bronze)"
-echo "  2. approve AXON 给 HiveAgent 合约:"
-echo "     cast send $AXON_TOKEN_ADDRESS 'approve(address,uint256)' $HIVE_AGENT <amount> --private-key <agent_pk> --rpc-url $RPC"
-echo "  3. 注册:"
-echo "     cast send $HIVE_AGENT 'register(uint256)' <amount> --private-key <agent_pk> --rpc-url $RPC"
-echo ""
-echo "注册后即可参与预测轮次 (commit / reveal)。"
+echo "现在可以参与预测轮次了 (commit → reveal → settle)"
+
+# TG 通知
+bash "$SCRIPT_DIR/tg-notify.sh" "🆕 *新 Agent 注册*
+地址: \`${AGENT_ADDR}\`
+余额: ${BAL_AXON} AXON | 等级: ${TIER}
+HiveScore: 0 (初始)"

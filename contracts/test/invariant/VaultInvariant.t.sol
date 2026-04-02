@@ -9,8 +9,8 @@ import {HiveTypes} from "../../src/interfaces/IHiveTypes.sol";
 contract VaultInvariantTest is BaseTest {
     function setUp() public override {
         super.setUp();
-        _registerAgent(alice, 15, 200e18);
-        _registerAgent(bob, 12, 150e18);
+        _registerAgent(alice, 200e18);
+        _registerAgent(bob, 150e18);
         _fundVault(10_000e6);
 
         // 给 round 合约更多 USDT 以模拟利润

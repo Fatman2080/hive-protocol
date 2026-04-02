@@ -5,7 +5,7 @@ import {IHiveScore} from "./interfaces/IHiveScore.sol";
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 
 /// @title HiveScore — 蜂巢内部积分系统
-/// @notice 仅由 HiveRound 合约在结算时调用 updateScore，外部只读。
+/// @notice 初始分 0，仅通过预测表现升降。Score 就是 Agent 的权重。
 ///
 /// 积分规则：
 ///   正确 → +(1 + floor(confidence/50))，连胜 ≥ 3 额外 +1
@@ -22,20 +22,15 @@ contract HiveScore is IHiveScore, AccessControl {
         uint256 bestStreak;
     }
 
-    uint256 public constant INITIAL_SCORE = 50;
+    uint256 public constant INITIAL_SCORE = 0;
 
     mapping(address => ScoreData) private _scores;
-
-    // 简易排行榜：存储 top-N agent 地址（链下辅助维护更高效，
-    // 这里仅提供 getLeaderboard 接口的最小链上实现）
     address[] private _allAgents;
     mapping(address => bool) private _registered;
 
     constructor(address admin) {
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
     }
-
-    // ─── 写入（仅 HiveRound） ──────────────────────────────
 
     function updateScore(address agent, bool correct, uint8 confidence) external onlyRole(ROUND_ROLE) {
         ScoreData storage s = _scores[agent];
@@ -59,7 +54,7 @@ contract HiveScore is IHiveScore, AccessControl {
             }
 
             if (s.streak >= 3) {
-                s.score += 1; // 连胜加成
+                s.score += 1;
             }
 
             if (uint256(s.streak) > s.bestStreak) {
@@ -68,7 +63,7 @@ contract HiveScore is IHiveScore, AccessControl {
         } else {
             uint256 penalty = uint256(delta);
             if (s.streak <= -5) {
-                penalty += 1; // 连败加罚
+                penalty += 1;
             }
             s.score = s.score > penalty ? s.score - penalty : 0;
 
@@ -84,8 +79,6 @@ contract HiveScore is IHiveScore, AccessControl {
         emit ScoreUpdated(agent, s.score, correct ? delta : -delta, correct);
         emit StreakUpdated(agent, s.streak);
     }
-
-    // ─── 只读 ──────────────────────────────────────────────
 
     function getScore(address agent) external view returns (uint256) {
         if (!_registered[agent]) return INITIAL_SCORE;
@@ -119,7 +112,6 @@ contract HiveScore is IHiveScore, AccessControl {
         uint256 len = _allAgents.length;
         if (count > len) count = len;
 
-        // 简单 O(n*k) 选择，链上排行榜仅供小规模使用
         agents = new address[](count);
         scores = new uint256[](count);
         bool[] memory picked = new bool[](len);
