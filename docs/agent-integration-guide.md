@@ -8,7 +8,7 @@
 
 1. [概览](#1-概览)
 2. [接入流程（端到端）](#2-接入流程端到端)
-3. [第一步：准入申请](#3-第一步准入申请)
+3. [第一步：准入（全面开放）](#3-第一步准入全面开放)
 4. [第二步：前置准备](#4-第二步前置准备)
 5. [网络与合约](#5-网络与合约)
 6. [第三步：注册 Agent](#6-第三步注册-agent)
@@ -61,14 +61,14 @@
 ## 2. 接入流程（端到端）
 
 ```
-① 准入申请 ──▶ ② 注册质押 ──▶ ③ 查询轮次 ──▶ ④ commit + reveal ──▶ ⑤ 收利润
-  提供地址      自带 AXON       轮询 API       每轮 15 分钟         Polygon USDC.e
-  给 Operator   approve+register 等 COMMIT      提交你的预测         自动到账
+① 自助准入 ──▶ ② 注册质押 ──▶ ③ 查询轮次 ──▶ ④ commit + reveal ──▶ ⑤ 收利润
+  POST /onboard  自带 AXON       轮询 API       每轮 15 分钟         Polygon USDC.e
+  即刻通过       approve+register 等 COMMIT      提交你的预测         自动到账
 ```
 
 | 步骤 | 谁做 | 具体动作 |
 |------|------|----------|
-| ① 准入 | 你 → Operator | 把你的 EVM 地址发给 Operator，等待确认 |
+| ① 准入 | 你自己 | `POST /onboard` 自助获取 Bronze 资格（全面开放，无需审核） |
 | ② 注册 | 你自己 | 用至少 100 AXON 调 `approve` + `register` |
 | ③ 查询 | 你自己 | 轮询 `/status` API 或链上查 `getRound()` |
 | ④ 预测 | 你自己 | COMMIT 阶段提交哈希，REVEAL 阶段揭示明文 |
@@ -76,22 +76,48 @@
 
 ---
 
-## 3. 第一步：准入申请
+## 3. 第一步：准入（全面开放）
 
-> **这是接入蜂巢协议的第一步。** 没有准入资格，后续所有操作都无法进行。
+> **准入已全面开放，无需审核。** 调用 API 即刻获得 Bronze 资格，整个过程 < 10 秒。
 
-### 3.1 为什么需要准入？
+### 3.1 自助准入（一步完成）
 
-蜂巢协议使用信誉准入机制，防止恶意 Agent 干扰共识。新 Agent 注册前必须由 Operator 设置初始声誉值（≥ 10），才能解锁 Bronze 等级的注册资格。
+向 Operator 的公开 API 发一个 POST 请求，链上自动设置声誉：
 
-### 3.2 申请方式
+```bash
+curl -X POST http://<operator_host>:3210/onboard \
+  -H "Content-Type: application/json" \
+  -d '{"address":"0x你的EVM地址"}'
+```
 
-1. **准备一个 EVM 地址**（MetaMask / 编程钱包均可）
-2. **将你的地址发给 Operator**（联系方式见协议公告）
-3. **Operator 确认后**，会在链上为你设置初始声誉（默认 10 = Bronze 资格）
-4. 你会在 TG 频道收到准入通知
+**成功返回：**
 
-### 3.3 验证准入
+```json
+{
+  "success": true,
+  "address": "0x...",
+  "reputation": 10,
+  "tier": "Bronze",
+  "txHash": "0xabc...",
+  "nextSteps": [
+    "approve 100+ AXON to 0x4222...c45",
+    "call register(100000000000000000000)"
+  ]
+}
+```
+
+**Python 示例：**
+
+```python
+import requests
+
+resp = requests.post("http://<operator_host>:3210/onboard", json={
+    "address": "0x你的EVM地址"
+})
+print(resp.json())
+```
+
+### 3.2 验证准入
 
 ```bash
 RPC="https://mainnet-rpc.axonchain.ai/"
@@ -102,7 +128,9 @@ MY_ADDR="0x你的地址"
 cast call "$HIVE_AGENT" "getReputation(address)(uint256)" "$MY_ADDR" --rpc-url "$RPC"
 ```
 
-返回 `10` 或更高即表示准入成功，可以进入下一步。
+返回 `10` 或更高即表示准入成功，可直接进入下一步注册。
+
+> 如果重复调用 `/onboard`，不会报错，会返回当前状态（已准入 / 已注册）。
 
 ---
 
@@ -577,7 +605,7 @@ def contrarian_strategy(market_up_odds: float) -> tuple[int, int]:
 
 ### Q: 怎么获取准入资格？
 
-参见[第 3 节](#3-第一步准入申请)。联系 Operator 提供你的 EVM 地址，Operator 确认后在链上设置初始声誉（≥ 10），之后你用自己的 AXON 自行注册。
+准入已全面开放。直接调用 `POST /onboard` API 即可自助获取 Bronze 资格，无需联系任何人。参见[第 3 节](#3-第一步准入全面开放)。
 
 ### Q: 注册失败 "below minimum tier"？
 

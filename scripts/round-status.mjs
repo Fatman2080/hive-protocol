@@ -8,12 +8,14 @@
  * 外部 Agent 可通过 HTTP 接口获取当前轮次信息，决定何时 commit/reveal。
  *
  * API 端点:
- *   GET /status          — 当前轮次完整状态
- *   GET /phase           — 仅返回当前阶段 ("COMMIT"/"REVEAL"/"SETTLED"/"IDLE")
- *   GET /next-slot       — 下一个 15 分钟窗口时间
+ *   GET  /status          — 当前轮次完整状态
+ *   GET  /phase           — 仅返回当前阶段 ("COMMIT"/"REVEAL"/"SETTLED"/"IDLE")
+ *   GET  /next-slot       — 下一个 15 分钟窗口时间
+ *   POST /onboard         — 自助准入（body: {"address":"0x..."}）
  */
 
-import { createPublicClient, http, parseAbi } from 'viem';
+import { createPublicClient, createWalletClient, http, parseAbi } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { readFileSync } from 'fs';
 import { createServer } from 'http';
 
@@ -48,9 +50,60 @@ const roundAbi = parseAbi([
 const agentAbi = parseAbi([
   'function isActive(address) view returns (bool)',
   'function activeAgentCount() view returns (uint256)',
+  'function getReputation(address) view returns (uint256)',
+  'function setReputation(address,uint256)',
 ]);
 
-const axon = createPublicClient({ transport: http(RPC) });
+const axon = createPublicClient({ chain: { id: 8210 }, transport: http(RPC) });
+
+const OPERATOR_KEY = process.env.OPERATOR_PRIVATE_KEY;
+let axonWallet = null;
+if (OPERATOR_KEY) {
+  const opAccount = privateKeyToAccount(OPERATOR_KEY);
+  axonWallet = createWalletClient({ account: opAccount, chain: { id: 8210, name: 'Axon' }, transport: http(RPC) });
+}
+
+const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN || '8310104753:AAHmuR64fDdAxzdnn6gcxmywhh5S9YkowP4';
+const TG_CHAT_ID   = process.env.TG_CHAT_ID   || '-1003349791999';
+const TG_THREAD_ID = process.env.TG_THREAD_ID || '9228';
+
+async function tgNotify(text) {
+  try {
+    await fetch(`https://api.telegram.org/bot${TG_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: TG_CHAT_ID, message_thread_id: parseInt(TG_THREAD_ID), parse_mode: 'Markdown', text }),
+    });
+  } catch {}
+}
+
+async function onboardAgent(address) {
+  if (!axonWallet) return { success: false, error: 'Operator key not configured' };
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return { success: false, error: 'Invalid address format' };
+
+  const rep = await axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'getReputation', args: [address] });
+  if (rep >= 10n) {
+    const isActive = await axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'isActive', args: [address] });
+    return { success: true, address, reputation: Number(rep), alreadyActive: isActive, message: isActive ? 'Already registered and active' : 'Already admitted, proceed to register' };
+  }
+
+  const hash = await axonWallet.writeContract({
+    address: HIVE_AGENT, abi: agentAbi,
+    functionName: 'setReputation', args: [address, 10n],
+    gas: 100000n,
+  });
+
+  await tgNotify(`🆕 *新 Agent 自助准入*\n地址: \`${address}\`\n声誉: 10 | 等级: Bronze\ntx: \`${hash.slice(0, 20)}...\``);
+
+  return {
+    success: true, address, reputation: 10, tier: 'Bronze',
+    txHash: hash,
+    nextSteps: [
+      `approve 100+ AXON to ${HIVE_AGENT}`,
+      `call register(100000000000000000000)`,
+    ],
+  };
+}
 
 async function getStatus() {
   const roundId = await axon.readContract({
@@ -135,9 +188,27 @@ const server = createServer(async (req, res) => {
         nextSlotISO: new Date(next * 1000).toISOString(),
         secondsUntil: next - now,
       }));
+    } else if (req.url === '/onboard' && req.method === 'POST') {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      try {
+        const { address } = JSON.parse(body);
+        const result = await onboardAgent(address);
+        res.statusCode = result.success ? 200 : 400;
+        res.end(JSON.stringify(result, null, 2));
+      } catch (e) {
+        res.statusCode = 400;
+        res.end(JSON.stringify({ error: 'Invalid JSON. Send: {"address":"0x..."}' }));
+      }
+    } else if (req.url === '/onboard' && req.method === 'GET') {
+      res.end(JSON.stringify({
+        endpoint: 'POST /onboard',
+        usage: 'curl -X POST http://host:3210/onboard -H "Content-Type: application/json" -d \'{"address":"0x..."}\'',
+        description: 'Self-service admission. Sets initial reputation to 10 (Bronze).',
+      }, null, 2));
     } else {
       res.statusCode = 404;
-      res.end(JSON.stringify({ error: 'Not found. Use /status, /phase, or /next-slot' }));
+      res.end(JSON.stringify({ error: 'Not found. Use /status, /phase, /next-slot, or POST /onboard' }));
     }
   } catch (e) {
     res.statusCode = 500;
@@ -147,7 +218,8 @@ const server = createServer(async (req, res) => {
 
 server.listen(PORT, () => {
   console.log(`蜂巢协议 — 轮次状态 API`);
-  console.log(`  http://localhost:${PORT}/status`);
-  console.log(`  http://localhost:${PORT}/phase`);
-  console.log(`  http://localhost:${PORT}/next-slot`);
+  console.log(`  GET  http://localhost:${PORT}/status`);
+  console.log(`  GET  http://localhost:${PORT}/phase`);
+  console.log(`  GET  http://localhost:${PORT}/next-slot`);
+  console.log(`  POST http://localhost:${PORT}/onboard   ← 自助准入（开放）`);
 });
