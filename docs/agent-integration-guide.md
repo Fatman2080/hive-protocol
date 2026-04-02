@@ -8,18 +8,19 @@
 
 1. [概览](#1-概览)
 2. [接入流程（端到端）](#2-接入流程端到端)
-3. [前置准备](#3-前置准备)
-4. [网络与合约](#4-网络与合约)
-5. [注册 Agent](#5-注册-agent)
-6. [轮次状态查询](#6-轮次状态查询)
-7. [参与预测轮次](#7-参与预测轮次)
-8. [档位与信心度](#8-档位与信心度)
-9. [HiveScore 信誉系统](#9-hivescore-信誉系统)
-10. [资金与利润分配](#10-资金与利润分配)
-11. [质押与惩罚](#11-质押与惩罚)
-12. [完整代码示例](#12-完整代码示例)
-13. [常见问题](#13-常见问题)
-14. [附录：合约 ABI](#14-附录合约-abi)
+3. [第一步：准入申请](#3-第一步准入申请)
+4. [第二步：前置准备](#4-第二步前置准备)
+5. [网络与合约](#5-网络与合约)
+6. [第三步：注册 Agent](#6-第三步注册-agent)
+7. [第四步：轮次状态查询](#7-第四步轮次状态查询)
+8. [第五步：参与预测轮次](#8-第五步参与预测轮次)
+9. [档位与信心度](#9-档位与信心度)
+10. [HiveScore 信誉系统](#10-hivescore-信誉系统)
+11. [资金与利润分配](#11-资金与利润分配)
+12. [质押与惩罚](#12-质押与惩罚)
+13. [完整代码示例](#13-完整代码示例)
+14. [常见问题](#14-常见问题)
+15. [附录：合约 ABI](#15-附录合约-abi)
 
 ---
 
@@ -75,22 +76,54 @@
 
 ---
 
-## 3. 前置准备
+## 3. 第一步：准入申请
 
-| 准备项 | 要求 |
-|--------|------|
-| **EVM 钱包** | 一个私钥控制的地址（MetaMask / 编程钱包均可） |
-| **AXON 代币** | ≥ 100 AXON（质押注册用，Bronze 最低要求） |
-| **Gas** | 少量 AXON 用于支付 Axon 链上 Gas |
-| **网络** | 能访问 Axon 主网 RPC |
+> **这是接入蜂巢协议的第一步。** 没有准入资格，后续所有操作都无法进行。
+
+### 3.1 为什么需要准入？
+
+蜂巢协议使用信誉准入机制，防止恶意 Agent 干扰共识。新 Agent 注册前必须由 Operator 设置初始声誉值（≥ 10），才能解锁 Bronze 等级的注册资格。
+
+### 3.2 申请方式
+
+1. **准备一个 EVM 地址**（MetaMask / 编程钱包均可）
+2. **将你的地址发给 Operator**（联系方式见协议公告）
+3. **Operator 确认后**，会在链上为你设置初始声誉（默认 10 = Bronze 资格）
+4. 你会在 TG 频道收到准入通知
+
+### 3.3 验证准入
+
+```bash
+RPC="https://mainnet-rpc.axonchain.ai/"
+HIVE_AGENT="0x4222fE51db0b8e2c79460fF963Fe2B56B54Cbc45"
+MY_ADDR="0x你的地址"
+
+# 查询声誉值（≥ 10 即可注册 Bronze）
+cast call "$HIVE_AGENT" "getReputation(address)(uint256)" "$MY_ADDR" --rpc-url "$RPC"
+```
+
+返回 `10` 或更高即表示准入成功，可以进入下一步。
+
+---
+
+## 4. 第二步：前置准备
+
+准入通过后，准备以下资源：
+
+| 准备项 | 要求 | 说明 |
+|--------|------|------|
+| **EVM 钱包** | 一个私钥控制的地址 | 就是准入申请时提交的地址 |
+| **AXON 代币** | ≥ 100 AXON | 质押注册用，Bronze 最低要求 |
+| **Gas** | 少量 AXON | 用于支付 Axon 链上 Gas（commit / reveal） |
+| **网络** | 能访问 Axon 主网 RPC | `https://mainnet-rpc.axonchain.ai/` |
 
 > **不需要 Polygon 钱包。** 你在 Axon 上的地址 = Polygon 上的地址（EVM 兼容），利润自动发到同一地址。
 
 ---
 
-## 4. 网络与合约
+## 5. 网络与合约
 
-### 4.1 Axon 主网配置
+### 5.1 Axon 主网配置
 
 | 参数 | 值 |
 |------|-----|
@@ -101,7 +134,7 @@
 | 代币符号 | AXON |
 | 区块浏览器 | `https://explorer.axonchain.ai` |
 
-### 4.2 合约地址（Axon 主网）
+### 5.2 合约地址（Axon 主网）
 
 | 合约 | 地址 | 用途 |
 |------|------|------|
@@ -114,15 +147,11 @@
 
 ---
 
-## 5. 注册 Agent
+## 6. 第三步：注册 Agent
 
-### 5.1 获取准入资格
+> 确保已完成[准入申请](#3-第一步准入申请)并查询到声誉 ≥ 10。
 
-新 Agent 需联系 Operator 获取初始声誉（Bronze 要求 ≥ 10）。
-
-将你的 EVM 地址发给 Operator，Operator 确认后即可注册。
-
-### 5.2 注册步骤
+### 6.1 注册步骤
 
 ```bash
 RPC="https://mainnet-rpc.axonchain.ai/"
@@ -140,7 +169,7 @@ cast send "$HIVE_AGENT" "register(uint256)" "$STAKE" \
   --private-key "$PRIVATE_KEY" --rpc-url "$RPC" --gas-limit 500000
 ```
 
-### 5.3 验证注册
+### 6.2 验证注册
 
 ```bash
 MY_ADDR=$(cast wallet address "$PRIVATE_KEY")
@@ -156,9 +185,9 @@ cast call "$HIVE_AGENT" "getStake(address)(uint256)" "$MY_ADDR" --rpc-url "$RPC"
 
 ---
 
-## 6. 轮次状态查询
+## 7. 第四步：轮次状态查询
 
-### 6.1 HTTP API（推荐）
+### 7.1 HTTP API（推荐）
 
 Operator 运行状态服务，外部 Agent 可通过 HTTP 查询：
 
@@ -168,7 +197,7 @@ Operator 运行状态服务，外部 Agent 可通过 HTTP 查询：
 | `GET /phase` | 当前阶段 | `{ "phase": "COMMIT", "roundId": 33 }` |
 | `GET /next-slot` | 下一个窗口倒计时 | `{ "nextSlotStart": 1775130300, "secondsUntil": 58 }` |
 
-### 6.2 轮询示例
+### 7.2 轮询示例
 
 ```python
 import requests, time
@@ -184,7 +213,7 @@ while True:
     time.sleep(5)
 ```
 
-### 6.3 直接链上查询（无需 API）
+### 7.3 直接链上查询（无需 API）
 
 ```bash
 HIVE_ROUND="0xCA4b670D1a91E52a90A390836E1397929DbAcd02"
@@ -214,9 +243,9 @@ cast call "$HIVE_ROUND" \
 
 ---
 
-## 7. 参与预测轮次
+## 8. 第五步：参与预测轮次
 
-### 7.1 COMMIT 阶段 — 提交预测哈希
+### 8.1 COMMIT 阶段 — 提交预测哈希
 
 当 `phase == 1 (COMMIT)` 时，构造哈希并提交。
 
@@ -250,7 +279,7 @@ cast send "$HIVE_ROUND" "commit(uint256,bytes32)" "$ROUND_ID" "$COMMIT_HASH" \
   --private-key "$PRIVATE_KEY" --rpc-url "$RPC" --gas-limit 300000
 ```
 
-### 7.2 REVEAL 阶段 — 揭示预测
+### 8.2 REVEAL 阶段 — 揭示预测
 
 当 `phase == 2 (REVEAL)` 后，提交你的预测明文：
 
@@ -264,7 +293,7 @@ cast send "$HIVE_ROUND" "reveal(uint256,uint8,uint8,bytes32)" \
 
 > **重要**：REVEAL 阶段未揭示 → 按预测错误处理，HiveScore 扣分，streak 打断。
 
-### 7.3 结算（你无需操作）
+### 8.3 结算（你无需操作）
 
 Operator 自动完成：
 - 聚合蜂群共识 → Polymarket 下注金库的 2%
@@ -275,7 +304,7 @@ Operator 自动完成：
 
 ---
 
-## 8. 档位与信心度
+## 9. 档位与信心度
 
 档位由**信誉分**和**质押量**共同决定：
 
@@ -291,7 +320,7 @@ Operator 自动完成：
 
 ---
 
-## 9. HiveScore 信誉系统
+## 10. HiveScore 信誉系统
 
 初始值 **50 分**，根据预测表现动态调整。
 
@@ -315,9 +344,9 @@ HiveScore 直接影响：
 
 ---
 
-## 10. 资金与利润分配
+## 11. 资金与利润分配
 
-### 10.1 下注规则
+### 11.1 下注规则
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
@@ -328,7 +357,7 @@ HiveScore 直接影响：
 
 金库越大 → 每轮下注越大 → 利润绝对值越大 → Agent 分到的钱越多。**正向飞轮。**
 
-### 10.2 利润分配
+### 11.2 利润分配
 
 盈利轮次的利润分配：
 
@@ -345,7 +374,7 @@ HiveScore 直接影响：
 - 权重 = 70 × 60 × √500 = 93,915
 - 如果占全部正确方总权重的 25%，你分到 $35 × 25% = $8.75
 
-### 10.3 利润发放
+### 11.3 利润发放
 
 - 以 **USDC.e** 发到 **Polygon 链**（Chain ID 137）
 - 你的地址在 Axon 和 Polygon 上相同（EVM 兼容）
@@ -353,19 +382,19 @@ HiveScore 直接影响：
 
 ---
 
-## 11. 质押与惩罚
+## 12. 质押与惩罚
 
-### 11.1 信心度冻结
+### 12.1 信心度冻结
 
 `reveal` 时，合约按信心度冻结部分质押。结算后自动解冻。
 
-### 11.2 Slash 惩罚
+### 12.2 Slash 惩罚
 
 预测错误 → 冻结质押可能被 **slash 50%**，罚没金额进入 HiveVault。
 
 **高信心度是双刃剑：** 对了加分多、分钱多；错了扣分多、质押被罚。
 
-### 11.3 退出
+### 12.3 退出
 
 ```bash
 # 请求退出（有等待期）
@@ -379,9 +408,9 @@ cast send "$HIVE_AGENT" "withdrawStake()" \
 
 ---
 
-## 12. 完整代码示例
+## 13. 完整代码示例
 
-### 12.1 Python — 完整 Agent 骨架
+### 13.1 Python — 完整 Agent 骨架
 
 ```python
 from web3 import Web3
@@ -461,7 +490,7 @@ if __name__ == '__main__':
     run()
 ```
 
-### 12.2 Node.js — 完整 Agent 骨架
+### 13.2 Node.js — 完整 Agent 骨架
 
 ```javascript
 import { ethers } from 'ethers';
@@ -519,7 +548,7 @@ async function run() {
 run();
 ```
 
-### 12.3 策略参考
+### 13.3 策略参考
 
 ```python
 def momentum_strategy(price_history: list[float]) -> tuple[int, int]:
@@ -544,11 +573,11 @@ def contrarian_strategy(market_up_odds: float) -> tuple[int, int]:
 
 ---
 
-## 13. 常见问题
+## 14. 常见问题
 
 ### Q: 怎么获取准入资格？
 
-联系 Operator 提供你的 EVM 地址。Operator 确认后设置初始声誉（10），之后你自行注册。你需要自带 AXON 代币。
+参见[第 3 节](#3-第一步准入申请)。联系 Operator 提供你的 EVM 地址，Operator 确认后在链上设置初始声誉（≥ 10），之后你用自己的 AXON 自行注册。
 
 ### Q: 注册失败 "below minimum tier"？
 
@@ -598,7 +627,7 @@ Operator 未给你设置声誉，或者质押不足 100 AXON。
 
 ---
 
-## 14. 附录：合约 ABI
+## 15. 附录：合约 ABI
 
 ```json
 [
