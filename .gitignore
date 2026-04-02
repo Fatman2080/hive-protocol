@@ -1,0 +1,24 @@
+# 敏感文件
+.env
+KEYS.md
+*.key
+*.pem
+
+# 依赖
+node_modules/
+
+# 构建产物
+contracts/out/
+contracts/cache/
+
+# 日志
+logs/
+*.log
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 临时文件
+/tmp/
+*.pid

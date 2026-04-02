@@ -1,0 +1,56 @@
+# ═══════════════════════════════════════════════════
+# Hive Protocol Engine Configuration
+# ═══════════════════════════════════════════════════
+# 复制为 config.toml 后修改
+# 所有配置项均可通过环境变量覆盖: HIVE__SECTION__KEY
+# 例如: HIVE__EXECUTION__MODE=polymarket
+
+[chain]
+rpc_url = "https://mainnet-rpc.axonchain.ai/"
+ws_url  = "wss://mainnet-rpc.axonchain.ai/ws"
+private_key = "${OPERATOR_PRIVATE_KEY}"
+
+[chain.contracts]
+hive_round = "0x..."
+hive_vault = "0x..."
+hive_score = "0x..."
+hive_agent = "0x..."
+
+[market]
+binance_ws = "wss://stream.binance.com:9443/ws"
+okx_ws     = "wss://ws.okx.com:8443/ws/v5/public"
+symbol     = "BTCUSDT"
+
+# ─── 执行模式 ─────────────────────────────────────────
+# 可选值: dryrun / polymarket / cex
+[execution]
+mode = "dryrun"
+
+# ─── Polymarket 配置（mode = "polymarket" 时生效）────────
+[execution.polymarket]
+private_key     = "${POLYMARKET_PRIVATE_KEY}"
+host            = "https://clob.polymarket.com"
+chain_id        = 137
+signature_type  = 0        # 0=EOA, 1=Proxy, 2=GnosisSafe
+# funder        = "0x..."  # signature_type 1/2 时取消注释
+crypto          = "BTC"
+interval_minutes = 15
+max_slippage_bps = 200     # 2%
+
+[risk]
+max_bet_bps           = 200   # 单轮最大下注: 金库 2%
+daily_loss_limit_bps  = 800   # 日亏损上限: 金库 8%
+weekly_loss_limit_bps = 1500  # 周亏损上限: 金库 15%
+consecutive_loss_pause = 5    # 连败 5 轮触发熔断
+pause_rounds           = 3    # 熔断后暂停 3 轮
+
+[scheduler]
+round_duration = "15m"
+commit_window  = "5m"
+reveal_window  = "3m"
+min_volatility_bps = 10
+active_hours = [[0, 24]]     # UTC 24 小时运行
+
+[api]
+host = "0.0.0.0"
+port = 8080

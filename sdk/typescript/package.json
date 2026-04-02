@@ -1,0 +1,23 @@
+{
+  "name": "@hive-protocol/sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for Hive Protocol — AI Agent Swarm Prediction Fund",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "viem": "^2.20.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.5.0",
+    "typescript": "^5.5.0"
+  },
+  "license": "Apache-2.0"
+}

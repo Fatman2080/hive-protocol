@@ -1,0 +1,50 @@
+# ═══════════════════════════════════════════════════
+# Hive Protocol Engine Configuration
+# ═══════════════════════════════════════════════════
+
+[chain]
+rpc_url = "https://mainnet-rpc.axonchain.ai/"
+ws_url  = "wss://mainnet-rpc.axonchain.ai/ws"
+private_key = "${OPERATOR_PRIVATE_KEY}"
+
+[chain.contracts]
+hive_round = "0xCA4b670D1a91E52a90A390836E1397929DbAcd02"
+hive_vault = "0x5904039a0e3A37294f79ea43edBacD1366c5E371"
+hive_score = "0xc55EC85F2ee552F565f13f2dc9c77fd6B16F3b14"
+hive_agent = "0x4222fE51db0b8e2c79460fF963Fe2B56B54Cbc45"
+
+[market]
+binance_ws = "wss://stream.binance.com:9443/ws"
+okx_ws     = "wss://ws.okx.com:8443/ws/v5/public"
+symbol     = "BTCUSDT"
+
+[execution]
+mode = "polymarket"
+
+[execution.polymarket]
+private_key      = "${POLYMARKET_PRIVATE_KEY}"
+host             = "https://clob.polymarket.com"
+chain_id         = 137
+signature_type   = 2                    # GnosisSafe (浏览器钱包代理)
+funder           = "0x943fFd266DF06B40409B4c8b06242fd85076de8b"
+crypto           = "BTC"
+interval_minutes = 15
+max_slippage_bps = 200
+
+[risk]
+max_bet_bps           = 200
+daily_loss_limit_bps  = 800
+weekly_loss_limit_bps = 1500
+consecutive_loss_pause = 5
+pause_rounds           = 3
+
+[scheduler]
+round_duration = "15m"
+commit_window  = "5m"
+reveal_window  = "3m"
+min_volatility_bps = 10
+active_hours = [[0, 24]]
+
+[api]
+host = "0.0.0.0"
+port = 8080
