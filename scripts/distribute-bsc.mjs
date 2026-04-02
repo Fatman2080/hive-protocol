@@ -38,7 +38,7 @@ const FACTORY     = '0xab45c5a4b0c941a2f231c04c3f49182e1a254052'; // ProxyWallet
 const POLYMARKET_PK = process.env.POLYMARKET_PRIVATE_KEY;
 const HIVE_AGENT    = process.env.HIVE_AGENT_ADDRESS || '0x4222fE51db0b8e2c79460fF963Fe2B56B54Cbc45';
 const HIVE_SCORE    = process.env.HIVE_SCORE_ADDRESS || '0xc55EC85F2ee552F565f13f2dc9c77fd6B16F3b14';
-const RESERVE_ADDR  = process.env.RESERVE_ADDRESS || '0x754876eeE86180C48771043b9fc9Ad885996b3dd';
+const RESERVE_ADDR  = process.env.RESERVE_ADDRESS;
 
 const AGENT_SHARE_PCT   = 35;
 const RESERVE_SHARE_PCT = 25; // 10% buyback + 10% risk + 5% ops

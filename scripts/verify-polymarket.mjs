@@ -15,9 +15,9 @@ import { createPublicClient, http, formatUnits } from 'viem';
 import { polygon } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 
-const PRIVATE_KEY = 'REDACTED_USE_ENV';
-const EXPECTED_EOA = '0xf341e829c169d952bafb66076b01cdfc2f74eae1';
-const PROXY_WALLET = '0x943fFd266DF06B40409B4c8b06242fd85076de8b';
+const PRIVATE_KEY = process.env.POLYMARKET_PRIVATE_KEY;
+const EXPECTED_EOA = process.env.POLYMARKET_EOA || '';
+const PROXY_WALLET = process.env.POLYMARKET_FUNDER || '';
 
 const USDC_E = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const GAMMA_HOST = 'https://gamma-api.polymarket.com';
