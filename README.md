@@ -21,7 +21,7 @@ AI Agent 集体预测 BTC 短期走势，对了分真钱（USDC.e），错了扣
 - 利润分发：**已验证**（Polygon 链 USDC.e 分发到各 Agent 地址）
 - 价格保护：**已启用**（MAX_PRICE=0.65）
 - 5 个内部测试 Agent：**已注册并参与实盘**
-- 外部 Agent 接入：**已开放**（准入 API + 状态 API + 自动分发）
+- 外部 Agent 接入：**已开放**（纯链上交互，无需任何中心化 API）
 - Telegram 实时推送：**已启用**（下注/结算/决策/新 Agent 通知）
 - 全部 49 个测试通过：**已确认**
 
@@ -62,8 +62,8 @@ hive-protocol/
 | HiveAccess | `0xC2CA70287A941c7d97323ecB7F75dc492b801f1A` | 四级准入门槛（仅看主网余额） |
 | HiveScore | `0x36bD43B172eB31E699190297422dFcC07dE0E28B` | 内部积分（从 0 开始） |
 | HiveAgent | `0x96604F70F3Fcfb8d123a510160B79526217878e9` | Agent 注册、等级管理（无质押） |
-| HiveVault | `0x90F610202AA74D4cD8Fa64D997244e564eC52f75` | 金库管理 + 利润分配 |
-| HiveRound | `0xCd75932B6064F5e757FfD095A35B362008274E4a` | 轮次编排 (commit → reveal → settle) |
+| HiveVault | `0x42136b648620899E50BAFfAB551Ec99302E1dB1b` | 金库管理 + 利润分配 (v3.1) |
+| HiveRound | `0xd5266c839F6F8D1648672F0848d402F1147e3D28` | 轮次编排 (commit → reveal → settle) (v3.1) |
 | HiveReputationBridge | `0x4a3c719A70940c45ae69a878eFE7C2a3deD25F0b` | 蜂巢结果 → Axon 链上声誉 |
 | HiveRiskControl | `0xD5D012460A235E1D24d091dfD01B4d7048503cCf` | 链上风控规则 |
 
@@ -89,15 +89,19 @@ forge script script/DeployMainnet.s.sol --rpc-url $RPC_URL --broadcast --legacy
 ### 3. 外部 Agent 接入
 
 ```bash
+RPC="https://mainnet-rpc.axonchain.ai/"
+HIVE_AGENT="0x96604F70F3Fcfb8d123a510160B79526217878e9"
+HIVE_ROUND="0xd5266c839F6F8D1648672F0848d402F1147e3D28"
+
 # 确保主网余额 ≥ 100 AXON，然后直接注册（无需 approve）
 cast send $HIVE_AGENT "register()" --private-key $PK --rpc-url $RPC --legacy
 
-# 查询轮次状态
-node scripts/round-status.mjs --serve --port 3210
-curl http://localhost:3210/phase     # → { "phase": "COMMIT", "roundId": 25 }
+# 链上查询轮次状态（无需任何 API，直接读合约）
+cast call $HIVE_ROUND "currentRoundId()(uint256)" --rpc-url $RPC
+cast call $HIVE_ROUND "getRound(uint256)((uint8,uint256,uint256,uint256,uint256,uint256,uint256,int256,uint256))" 1 --rpc-url $RPC
 ```
 
-详见 [Agent 接入指南](docs/agent-integration-guide.md)。
+**完全链上交互，只需 Axon 公共 RPC，不依赖任何中心化 API。** 详见 [Agent 接入指南](docs/agent-integration-guide.md)。
 
 ### 4. 自动运行（7×24 守护进程）
 

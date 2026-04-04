@@ -1,18 +1,18 @@
 /**
- * 蜂巢协议 — Polygon USDC.e 利润分发
+ * 蜂巢协议 — Polygon USDC.e 利润分发 (v2)
+ *
+ * 只奖励预测正确的 Agent，按 HiveScore × confidence 加权分配
  *
  * 分配比例:
- *   35% → Agent 按权重分润 (Polygon USDC.e)
- *   25% → 储备地址 (回购10% + 风险10% + 运营5%)
- *   40% → 留存 Polymarket 金库 (自动，不需要转账)
- *
- * 利润通过 Polymarket ProxyWalletFactory.proxy() 从 Proxy Wallet 转出
+ *   35% → 预测正确的 Agent 按权重分润
+ *   25% → 储备地址
+ *   40% → 留存金库
  *
  * 用法:
- *   node scripts/distribute-bsc.mjs --round-id 42 --total-profit 200 [--dry-run]
+ *   node scripts/distribute-bsc.mjs --round-id 42 --total-profit 200 --actual-direction UP [--dry-run]
  */
 
-import { createPublicClient, createWalletClient, http, formatUnits, parseUnits, parseAbi, encodeFunctionData } from 'viem';
+import { createPublicClient, createWalletClient, http, formatUnits, parseUnits, parseAbi } from 'viem';
 import { polygon } from 'viem/chains';
 import { privateKeyToAccount } from 'viem/accounts';
 import { readFileSync } from 'fs';
@@ -33,7 +33,6 @@ loadEnv();
 const AXON_RPC    = 'https://mainnet-rpc.axonchain.ai/';
 const POLYGON_RPC = 'https://polygon-bor-rpc.publicnode.com';
 const USDC_E      = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174'; // Polygon USDC.e (6 decimals)
-const FACTORY     = '0xab45c5a4b0c941a2f231c04c3f49182e1a254052'; // ProxyWalletFactory
 
 const POLYMARKET_PK = process.env.POLYMARKET_PRIVATE_KEY;
 const HIVE_AGENT    = process.env.HIVE_AGENT_ADDRESS || '0x4222fE51db0b8e2c79460fF963Fe2B56B54Cbc45';
@@ -49,9 +48,10 @@ const getArg = (n) => { const i = args.indexOf(`--${n}`); return i >= 0 ? args[i
 const DRY_RUN      = args.includes('--dry-run');
 const ROUND_ID     = parseInt(getArg('round-id') || '0');
 const TOTAL_PROFIT = parseFloat(getArg('total-profit') || '0');
+const ACTUAL_DIR   = (getArg('actual-direction') || '').toUpperCase(); // UP or DOWN
 
-if (!ROUND_ID || !TOTAL_PROFIT) {
-  console.error('用法: node distribute-bsc.mjs --round-id <N> --total-profit <USDC金额>');
+if (!ROUND_ID || !TOTAL_PROFIT || !['UP', 'DOWN'].includes(ACTUAL_DIR)) {
+  console.error('用法: node distribute-bsc.mjs --round-id <N> --total-profit <USDC金额> --actual-direction <UP|DOWN>');
   process.exit(1);
 }
 if (!POLYMARKET_PK && !DRY_RUN) {
@@ -74,14 +74,11 @@ const erc20Abi = parseAbi([
   'function transfer(address,uint256) returns (bool)',
   'function balanceOf(address) view returns (uint256)',
 ]);
-const proxyAbi = parseAbi([
-  'function proxy((uint8 callType, address to, uint256 value, bytes data)[] calls) payable returns (bytes[])',
-]);
-
 // ─── Agent 地址：从链上动态获取 ─────────────────────
 const HIVE_ROUND = process.env.HIVE_ROUND_ADDRESS || '0xCA4b670D1a91E52a90A390836E1397929DbAcd02';
 const roundAbi = parseAbi([
   'function getParticipants(uint256 roundId) view returns (address[])',
+  'function getCommit(uint256 roundId, address agent) view returns (bytes32 commitHash, bool revealed, uint8 prediction, uint8 confidence, uint256 weight)',
 ]);
 
 // ─── 主流程 ──────────────────────────────────────────
@@ -90,19 +87,21 @@ const agentPool   = TOTAL_PROFIT * AGENT_SHARE_PCT / 100;
 const reservePool = TOTAL_PROFIT * RESERVE_SHARE_PCT / 100;
 const treasuryKeep = TOTAL_PROFIT * 40 / 100;
 
+const correctPred = ACTUAL_DIR === 'UP' ? 0 : 1; // 0=UP, 1=DOWN
+
 console.log('═══════════════════════════════════════════════════');
-console.log('  蜂巢协议 — Polygon USDC.e 利润分发');
+console.log('  蜂巢协议 — Polygon USDC.e 利润分发 v2');
 console.log('═══════════════════════════════════════════════════');
-console.log(`  轮次 #${ROUND_ID}  |  总利润 $${TOTAL_PROFIT}`);
-console.log(`  ├ Agent 35%  $${agentPool.toFixed(2)}`);
+console.log(`  轮次 #${ROUND_ID}  |  总利润 $${TOTAL_PROFIT}  |  实际方向: ${ACTUAL_DIR}`);
+console.log(`  ├ Agent 35%  $${agentPool.toFixed(2)}  (仅预测正确者)`);
 console.log(`  ├ 储备 25%   $${reservePool.toFixed(2)} → ${RESERVE_ADDR.slice(0,10)}...`);
 console.log(`  └ 留存 40%   $${treasuryKeep.toFixed(2)} → 留在 Polymarket`);
 console.log(`  EOA: ${account?.address || '(dry-run)'}`);
 console.log(`  模式: ${DRY_RUN ? '模拟' : '实际转账'}`);
 console.log('');
 
-// Step 1: 从链上动态获取本轮参与者
-console.log('[1] 读取 Axon 链上参与者数据...');
+// Step 1: 获取参与者 + 预测 + HiveScore
+console.log('[1] 读取链上参与者预测数据...');
 
 let participants;
 try {
@@ -115,105 +114,116 @@ try {
 }
 
 if (participants.length === 0) {
-  console.log('  ⚠️  无法从链上获取参与者，回退查询所有活跃 Agent...');
-  // 回退：扫描已知地址 + 动态发现
-  const knownAddrs = (process.env.KNOWN_AGENTS || '').split(',').filter(Boolean);
-  participants = knownAddrs.length > 0 ? knownAddrs : [];
+  console.log('  ⚠️  无参与者，跳过分发');
+  process.exit(0);
 }
 
-const eligible = [];
+const allAgents = [];
+const winners = [];
+
 for (const addr of participants) {
   try {
-    const [active, scoreVal, stake] = await Promise.all([
+    const [active, scoreVal, commitData] = await Promise.all([
       axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'isActive', args: [addr] }),
       axon.readContract({ address: HIVE_SCORE, abi: scoreAbi, functionName: 'getScore', args: [addr] }),
-      axon.readContract({ address: HIVE_AGENT, abi: agentAbi, functionName: 'getStake', args: [addr] }),
+      axon.readContract({ address: HIVE_ROUND, abi: roundAbi, functionName: 'getCommit', args: [BigInt(ROUND_ID), addr] }),
     ]);
 
-    const stakeNum = Number(formatUnits(stake, 18));
+    if (!active) continue;
+
+    const [, revealed, prediction, confidence] = commitData;
+    if (!revealed) continue;
+
     const scoreNum = Number(scoreVal);
-    const status = active ? '✅' : '⬚';
+    const confNum = Number(confidence);
+    const predNum = Number(prediction);
+    const predDir = predNum === 0 ? 'UP' : 'DOWN';
+    const isCorrect = predNum === correctPred;
     const shortAddr = addr.slice(0, 10);
 
-    console.log(`  ${status} ${shortAddr}...  Score=${scoreNum}  Stake=${stakeNum}`);
+    const icon = isCorrect ? '✅' : '❌';
+    console.log(`  ${icon} ${shortAddr}...  预测=${predDir} conf=${confNum}  Score=${scoreNum}  ${isCorrect ? '→ 有分润' : '→ 无分润'}`);
 
-    if (active) {
-      eligible.push({ name: shortAddr, addr, score: scoreNum, stake: stakeNum });
+    allAgents.push({ name: shortAddr, addr, score: scoreNum, confidence: confNum, prediction: predDir, correct: isCorrect });
+
+    if (isCorrect) {
+      winners.push({ name: shortAddr, addr, score: scoreNum, confidence: confNum });
     }
   } catch { continue; }
 }
 
-if (eligible.length === 0) {
-  console.log('\n⚠️  无活跃 Agent 参与本轮，跳过分发');
-  process.exit(0);
+console.log(`\n  参与: ${allAgents.length} 个  |  预测正确: ${winners.length} 个  |  错误: ${allAgents.length - winners.length} 个`);
+
+if (winners.length === 0) {
+  console.log('\n⚠️  无 Agent 预测正确，Agent 份额留存金库');
+  // 仍然分发储备金部分
 }
 
-// Step 2: 计算权重和分润
-console.log(`\n[2] 按权重分润 (${eligible.length} 个 Agent)...`);
+// Step 2: 按 HiveScore × confidence 加权分润（仅正确者）
+console.log(`\n[2] HiveScore × confidence 加权分润 (${winners.length} 个正确 Agent)...`);
 
 let totalWeight = 0;
-for (const a of eligible) {
-  a.weight = a.score * Math.sqrt(a.stake);
+for (const a of winners) {
+  const multiplier = Math.max(1, a.score);
+  a.weight = multiplier * a.confidence;
   totalWeight += a.weight;
 }
 
-for (const a of eligible) {
-  a.share = totalWeight > 0 ? (a.weight / totalWeight) * agentPool : agentPool / eligible.length;
+for (const a of winners) {
+  a.share = totalWeight > 0 ? (a.weight / totalWeight) * agentPool : 0;
 }
 
-const maxNameLen = Math.max(...eligible.map(a => a.name.length));
-for (const a of eligible) {
-  const pct = (a.weight / totalWeight * 100).toFixed(1);
-  console.log(`  ${a.name.padEnd(maxNameLen)}  权重=${a.weight.toFixed(1).padStart(8)}  占比=${pct.padStart(5)}%  → $${a.share.toFixed(4)}`);
+const maxNameLen = winners.length > 0 ? Math.max(...winners.map(a => a.name.length)) : 10;
+for (const a of winners) {
+  const pct = totalWeight > 0 ? (a.weight / totalWeight * 100).toFixed(1) : '0.0';
+  console.log(`  ${a.name.padEnd(maxNameLen)}  Score=${String(a.score).padStart(3)}  conf=${String(a.confidence).padStart(3)}  权重=${a.weight.toFixed(0).padStart(6)}  占比=${pct.padStart(5)}%  → $${a.share.toFixed(4)}`);
 }
 
-// Step 3: 通过 ProxyWalletFactory 批量转账 (Polygon)
-console.log(`\n[3] Polygon USDC.e 分发 (Agent 35% + 储备 25%)...`);
+const eligible = winners;
+
+// Step 3: EOA 直接 ERC-20 转账 (Polygon)
+console.log(`\n[3] Polygon USDC.e 分发 — EOA 直接转账 (Agent 35% + 储备 25%)...`);
 
 const totalTransferNeeded = agentPool + reservePool;
 
 if (!DRY_RUN && account) {
   const polyWallet = createWalletClient({ account, chain: polygon, transport: http(POLYGON_RPC) });
 
-  // 构造所有 ERC-20 transfer 调用
-  const transferCalls = [];
+  let successCount = 0;
+  let totalSent = 0;
 
-  // Agent 转账
+  // Agent 逐笔转账
   for (const a of eligible) {
     if (a.share < 0.001) { console.log(`  [跳过] ${a.name} 金额太小`); continue; }
-    const amount = parseUnits(a.share.toFixed(6), 6); // USDC.e 6 decimals
-    const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [a.addr, amount] });
-    transferCalls.push({ callType: 1, to: USDC_E, value: 0n, data });
-    console.log(`  Agent  ${a.name.padEnd(maxNameLen)} → ${a.addr.slice(0,10)}... $${a.share.toFixed(4)}`);
+    const amount = parseUnits(a.share.toFixed(6), 6);
+    try {
+      const hash = await polyWallet.writeContract({
+        address: USDC_E, abi: erc20Abi,
+        functionName: 'transfer', args: [a.addr, amount],
+      });
+      console.log(`  ✅ Agent  ${a.name.padEnd(maxNameLen)} → $${a.share.toFixed(4)}  tx:${hash.slice(0,18)}...`);
+      successCount++;
+      totalSent += a.share;
+    } catch (e) {
+      console.error(`  ❌ Agent  ${a.name} 转账失败: ${e.shortMessage || e.message}`);
+    }
   }
 
   // 储备地址转账 (25%)
   const reserveAmount = parseUnits(reservePool.toFixed(6), 6);
-  const reserveData = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [RESERVE_ADDR, reserveAmount] });
-  transferCalls.push({ callType: 1, to: USDC_E, value: 0n, data: reserveData });
-  console.log(`  储备   25%        → ${RESERVE_ADDR.slice(0,10)}... $${reservePool.toFixed(4)}`);
-
-  console.log(`\n  共 ${transferCalls.length} 笔转账, 总计 $${totalTransferNeeded.toFixed(2)} USDC.e`);
-
   try {
     const hash = await polyWallet.writeContract({
-      address: FACTORY, abi: proxyAbi,
-      functionName: 'proxy', args: [transferCalls],
-      gas: 500000n,
+      address: USDC_E, abi: erc20Abi,
+      functionName: 'transfer', args: [RESERVE_ADDR, reserveAmount],
     });
-    console.log(`  ✅ 批量转账成功! tx: ${hash}`);
-
-    const receipt = await polyPub.waitForTransactionReceipt({ hash, timeout: 60_000 })
-      .catch(() => null);
-    if (receipt) {
-      console.log(`  区块: ${receipt.blockNumber}  状态: ${receipt.status}`);
-    } else {
-      console.log(`  ⏳ Receipt 超时，tx 已提交: ${hash}`);
-    }
+    console.log(`  ✅ 储备   25%        → $${reservePool.toFixed(4)}  tx:${hash.slice(0,18)}...`);
+    successCount++;
+    totalSent += reservePool;
   } catch (e) {
-    console.error(`  ❌ 转账失败: ${e.shortMessage || e.message}`);
-    process.exit(1);
+    console.error(`  ❌ 储备转账失败: ${e.shortMessage || e.message}`);
   }
+
+  console.log(`\n  完成: ${successCount} 笔转账, 共 $${totalSent.toFixed(2)} USDC.e`);
 } else {
   for (const a of eligible) {
     console.log(`  [模拟] Agent  ${a.name.padEnd(maxNameLen)} → ${a.addr.slice(0,10)}... $${a.share.toFixed(4)}`);

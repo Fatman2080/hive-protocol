@@ -5,6 +5,7 @@ pragma solidity ^0.8.20;
 /// @notice 管理 USDT 资金池：下注额度、利润分配、风险准备金
 interface IHiveVault {
     event ProfitDistributed(uint256 indexed roundId, uint256 agentPool, uint256 retained, uint256 buyback, uint256 reserve, uint256 ops);
+    event TransferDeferred(uint256 indexed roundId, address indexed to, uint256 amount, string reason);
     event LossRecorded(uint256 indexed roundId, uint256 amount);
     event AgentClaimed(address indexed agent, uint256 amount);
     event ReserveUsed(uint256 amount);

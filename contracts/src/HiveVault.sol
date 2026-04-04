@@ -78,8 +78,13 @@ contract HiveVault is IHiveVault, AccessControl, ReentrancyGuard {
         _treasury += retained;
         _reserve += reserve;
 
-        usdt.safeTransfer(buybackReceiver, buyback);
-        usdt.safeTransfer(opsReceiver, ops);
+        if (_hasTokenContract()) {
+            usdt.safeTransfer(buybackReceiver, buyback);
+            usdt.safeTransfer(opsReceiver, ops);
+        } else {
+            emit TransferDeferred(roundId, buybackReceiver, buyback, "no token contract");
+            emit TransferDeferred(roundId, opsReceiver, ops, "no token contract");
+        }
 
         emit ProfitDistributed(roundId, agentPool, retained, buyback, reserve, ops);
     }
@@ -102,6 +107,7 @@ contract HiveVault is IHiveVault, AccessControl, ReentrancyGuard {
     function claim() external nonReentrant {
         uint256 amount = _pendingRewards[msg.sender];
         require(amount > 0, "HiveVault: nothing to claim");
+        require(_hasTokenContract(), "HiveVault: no token contract on this chain");
 
         _pendingRewards[msg.sender] = 0;
         usdt.safeTransfer(msg.sender, amount);
@@ -137,6 +143,13 @@ contract HiveVault is IHiveVault, AccessControl, ReentrancyGuard {
 
     function totalEarned(address agent) external view returns (uint256) {
         return _totalEarned[agent];
+    }
+
+    // ─── 内部 ──────────────────────────────────────────────
+
+    /// @dev 判断 usdt 地址是否为真实 ERC-20 合约（非占位符）
+    function _hasTokenContract() internal view returns (bool) {
+        return address(usdt).code.length > 0;
     }
 
     // ─── 管理 ──────────────────────────────────────────────

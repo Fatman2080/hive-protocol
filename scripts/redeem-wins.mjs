@@ -125,26 +125,20 @@ async function main() {
 
     const label = `${slug.slice(-10)} YES:${(Number(yesBal)/1e6).toFixed(2)} NO:${(Number(noBal)/1e6).toFixed(2)}`;
 
-    // 赎回
-    const redeemData = encodeFunctionData({
-      abi: ctfAbi,
-      functionName: 'redeemPositions',
-      args: [USDC_E, PARENT, info.conditionId, [1n, 2n]],
-    });
-
+    // 赎回 — 直接从 EOA 调用 CTF.redeemPositions()
     try {
       const bBefore = await polyPub.readContract({ address: USDC_E, abi: erc20Abi, functionName: 'balanceOf', args: [PROXY] });
 
       const callArgs = {
-        address: FACTORY, abi: proxyAbi,
-        functionName: 'proxy',
-        args: [[{ callType: 1, to: CTF, value: 0n, data: redeemData }]],
+        address: CTF, abi: ctfAbi,
+        functionName: 'redeemPositions',
+        args: [USDC_E, PARENT, info.conditionId, [1n, 2n]],
       };
 
       let gasEst;
       try {
         gasEst = await polyPub.estimateContractGas({ ...callArgs, account: account.address });
-        gasEst = gasEst * 130n / 100n; // +30% buffer
+        gasEst = gasEst * 130n / 100n;
       } catch (ge) {
         console.log(`  ⚠️  ${label} → gas估算失败: ${(ge.shortMessage || ge.message || '').slice(0, 80)}`);
         continue;
